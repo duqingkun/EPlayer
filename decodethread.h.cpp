@@ -2,6 +2,7 @@
 
 #include <QDebug>
 #include <QMutexLocker>
+#include <QElapsedTimer>
 
 extern "C"
 {
@@ -19,13 +20,10 @@ DecodeThread::DecodeThread(QObject *parent)
     : QThread(parent)
 {
     mAbort = false;
-
-    fAudio = fopen("./audio_44100_2_s16p.pcm", "wb");
 }
 
 DecodeThread::~DecodeThread()
 {
-    fclose(fAudio);
     mMutex.lock();
     mAbort = true;
     mMutex.unlock();
@@ -45,19 +43,22 @@ void DecodeThread::load(const QString &filename)
         wait();
     }
     mAbort = false;
+    init(mFilename);
     emit loaded();
 }
 
-void DecodeThread::run()
+bool DecodeThread::init(const QString &filename)
 {
     //初始化
     memset(&mCtx, 0, sizeof(Context));
     memset(&mParam, 0, sizeof(Param));
+    mTimestampTimer.invalidate();
 
     //打开编码器
     if(!openInput(&mCtx, mFilename.toStdString().c_str()))
     {
-        goto exit;
+        freeAll();
+        return false;
     }
 
     //av_dump_format(mCtx.fmt_ctx, 0, filename, 0);
@@ -72,6 +73,8 @@ void DecodeThread::run()
         mCtx.sws_ctx = sws_getContext(mCtx.v_codec_ctx->width, mCtx.v_codec_ctx->height,
             mCtx.v_codec_ctx->pix_fmt, mParam.video.width, mParam.video.height, mParam.video.fmt, SWS_BICUBIC, nullptr, nullptr, nullptr);
         mCtx.v_frm = av_frame_alloc();
+
+        emit videoInfo(mParam.video.width, mParam.video.height);
     }
 
     if (mCtx.hasAudio)
@@ -92,7 +95,19 @@ void DecodeThread::run()
 
         swr_init(mCtx.swr_ctx);
         mCtx.a_frm = av_frame_alloc();
+
+        emit audioInfo(mParam.audio.rate, mParam.audio.__nb_channels, (int)mParam.audio.fmt);
     }
+
+    return true;
+}
+
+void DecodeThread::run()
+{
+//    if(!init(mFilename))
+//    {
+//        goto exit;
+//    }
 
     AVPacket pkt;
     av_init_packet(&pkt);
@@ -116,6 +131,11 @@ void DecodeThread::run()
     decodePacket(&mCtx, &pkt, &mParam);
 
 exit:
+    freeAll();
+}
+
+void DecodeThread::freeAll()
+{
     if(mCtx.v_frm != nullptr) av_frame_free(&mCtx.v_frm);
     if (mCtx.a_frm != nullptr) av_frame_free(&mCtx.a_frm);
     if (mCtx.a_codec_ctx != nullptr) avcodec_free_context(&mCtx.a_codec_ctx);
@@ -183,147 +203,163 @@ bool DecodeThread::openInput(Context *ctx, const char *filename)
 void DecodeThread::decodePacket(Context *ctx, AVPacket *pkt, Param *param)
 {
     AVFrame *frm = av_frame_alloc();
-    int ret = -1;
     if(pkt->stream_index == ctx->a_index) //音频
     {
-        ret = avcodec_send_packet(ctx->a_codec_ctx, pkt);
-        if(ret < 0)
-        {
-            return;
-        }
-        while (ret >= 0)
-        {
-            mMutex.lock();
-            if(mAbort)
-            {
-                mMutex.unlock();
-                break;
-            }
-            mMutex.unlock();
-
-            ret = avcodec_receive_frame(ctx->a_codec_ctx, frm);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0)
-            {
-                break;
-            }
-
-            double timestamp = frm->pts * av_q2d(ctx->fmt_ctx->streams[ctx->a_index]->time_base);
-            qDebug() << "Audio timestamp: " << timestamp << "s";
-            int data_size = av_get_bytes_per_sample(param->audio.fmt);
-            if(data_size < 0)
-            {
-                break;
-            }
-
-            if(ctx->swr_ctx != nullptr)
-            {
-                if (ctx->a_frm->data[0] == nullptr)
-                {
-                    int dst_nb_samples = av_rescale_rnd(swr_get_delay(ctx->swr_ctx, ctx->a_codec_ctx->sample_rate) + frm->nb_samples,
-                        param->audio.rate, ctx->a_codec_ctx->sample_rate, AV_ROUND_UP);
-                    if(dst_nb_samples > param->audio.__nb_samples)
-                    {
-                        if(ctx->a_frm->data[0] != nullptr)
-                        {
-                            av_freep(&ctx->a_frm->data[0]);
-                        }
-
-                        ret = av_samples_alloc(ctx->a_frm->data, ctx->a_frm->linesize, param->audio.__nb_channels, dst_nb_samples, param->audio.fmt, 1);
-                        param->audio.__nb_samples = dst_nb_samples;
-                    }
-                }
-                ret = swr_convert(ctx->swr_ctx, ctx->a_frm->data, param->audio.__nb_samples, (const uint8_t**)frm->data, frm->nb_samples);
-                if(ret < 0)
-                {
-                    break;
-                }
-//                int dst_bufsize = av_samples_get_buffer_size(ctx->a_frm->linesize, param->audio.__nb_channels, ret, param->audio.fmt, 1);
-//                if (dst_bufsize < 0)
-//                {
-//                    break;
-//                }
-                //fwrite(ctx->a_frm->data[0], 1, dst_bufsize, fAudio);
-                for (int i = 0; i < frm->nb_samples; i++)
-                {
-                    for (int ch = 0; ch < ctx->a_codec_ctx->channels; ch++)
-                    {
-                        fwrite(ctx->a_frm->data[ch] + data_size * i, 1, data_size, fAudio);
-                    }
-                }
-                //emit audio(ctx->a_frm->data[0], dst_bufsize);
-            }
-            else
-            {
-                for (int i = 0; i < frm->nb_samples; i++)
-                {
-                    for (int ch = 0; ch < ctx->a_codec_ctx->channels; ch++)
-                    {
-                        fwrite(frm->data[ch] + data_size * i, 1, data_size, fAudio);
-                    }
-                }
-            }
-        }
-
+        decodeAudioPacket(ctx, pkt, frm, param);
     }
     else if(pkt->stream_index == ctx->v_index) //视频
     {
-        ret = avcodec_send_packet(ctx->v_codec_ctx, pkt);
-        if (ret < 0)
+        decodeVideoPacket(ctx, pkt, frm, param);
+    }
+
+    av_frame_free(&frm);
+}
+
+void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, Param *param)
+{
+    int ret = avcodec_send_packet(ctx->a_codec_ctx, pkt);
+    if(ret < 0)
+    {
+        return;
+    }
+    while (ret >= 0)
+    {
+        mMutex.lock();
+        if(mAbort)
         {
-            return;
+            mMutex.unlock();
+            break;
+        }
+        mMutex.unlock();
+
+        ret = avcodec_receive_frame(ctx->a_codec_ctx, frm);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0)
+        {
+            break;
         }
 
-        while (ret >= 0)
+        qint64 timestamp = (qint64)(frm->pts * av_q2d(ctx->fmt_ctx->streams[ctx->a_index]->time_base) * 1000); //ms
+        if(!mTimestampTimer.isValid())
         {
-            mMutex.lock();
-            if(mAbort)
-            {
-                mMutex.unlock();
-                break;
-            }
-            mMutex.unlock();
+            mTimestampTimer.start();
+        }
+        //qDebug() << "Audio timestamp: " << timestamp << "ms";
+        int data_size = av_get_bytes_per_sample(param->audio.fmt);
+        if(data_size < 0)
+        {
+            break;
+        }
 
-            ret = avcodec_receive_frame(ctx->v_codec_ctx, frm);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0)
+        if(ctx->swr_ctx != nullptr)     //需要转换格式
+        {
+            if (ctx->a_frm->data[0] == nullptr)
             {
-                break;
-            }
-
-            double timestamp = frm->pts * av_q2d(ctx->fmt_ctx->streams[ctx->v_index]->time_base);
-            //qDebug() << "Video timestamp: " << timestamp << "s";
-
-            if(ctx->sws_ctx != nullptr)
-            {
-                //为yuv420p_frm中的data,linesize指针分配空间
-                if(ctx->v_frm->data[0] == nullptr)
+                int dst_nb_samples = av_rescale_rnd(swr_get_delay(ctx->swr_ctx, ctx->a_codec_ctx->sample_rate) + frm->nb_samples,
+                    param->audio.rate, ctx->a_codec_ctx->sample_rate, AV_ROUND_UP);
+                if(dst_nb_samples > param->audio.__nb_samples)
                 {
-                    ret = av_image_alloc(ctx->v_frm->data, ctx->v_frm->linesize,
-                        param->video.width, param->video.height, param->video.fmt, 1);
-                }
+                    if(ctx->a_frm->data[0] != nullptr)
+                    {
+                        av_freep(&ctx->a_frm->data[0]);
+                    }
 
-                //转换
-                ret = sws_scale(ctx->sws_ctx, frm->data, frm->linesize, 0, ctx->v_codec_ctx->height,
-                    ctx->v_frm->data, ctx->v_frm->linesize);
-
-                if(ret == param->video.height)
-                {
-                    QImage image(ctx->v_frm->data[0], param->video.width, param->video.height,
-                            ctx->v_frm->linesize[0], QImage::Format_RGB888, nullptr, nullptr);
-                    emit frame(image);
-                    QThread::msleep(20);
+                    ret = av_samples_alloc(ctx->a_frm->data, ctx->a_frm->linesize, param->audio.__nb_channels, dst_nb_samples, param->audio.fmt, 1);
+                    param->audio.__nb_samples = dst_nb_samples;
                 }
             }
-            else
+            ret = swr_convert(ctx->swr_ctx, ctx->a_frm->data, param->audio.__nb_samples, (const uint8_t**)frm->data, frm->nb_samples);
+            if(ret < 0)
             {
-                //不做转换，则可能会有填充得空白数据，比如688*384的视频会填充成768*384，data中每行结尾都有无效数据
-                int ySize = frm->linesize[0] * ctx->v_codec_ctx->height;// ctx->v_codec_ctx->width * ctx->v_codec_ctx->height;
-                int uSize = ySize / 4;
-                int vSize = ySize / 4;
-//                fwrite(frm->data[0], 1, ySize, fVideo);
-//                fwrite(frm->data[1], 1, uSize, fVideo);
-//                fwrite(frm->data[2], 1, vSize, fVideo);
+                break;
             }
+
+            QByteArray datagram;
+            for (int i = 0; i < frm->nb_samples; i++)
+            {
+                for (int ch = 0; ch < ctx->a_codec_ctx->channels; ch++)
+                {
+                    datagram.append((const char *)(ctx->a_frm->data[ch] + data_size * i), data_size);
+                }
+            }
+            while (!mTimestampTimer.hasExpired((qint64)timestamp));
+            emit audio(datagram.constData(), datagram.size());
+        }
+        else    //不需要转换格式
+        {
+            QByteArray datagram;
+            for (int i = 0; i < frm->nb_samples; i++)
+            {
+                for (int ch = 0; ch < ctx->a_codec_ctx->channels; ch++)
+                {
+                    datagram.append((const char *)(ctx->a_frm->data[ch] + data_size * i), data_size);
+                }
+            }
+            while (!mTimestampTimer.hasExpired((qint64)timestamp));
+            emit audio(datagram.constData(), datagram.size());
         }
     }
 }
 
+void DecodeThread::decodeVideoPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, Param *param)
+{
+    int ret = avcodec_send_packet(ctx->v_codec_ctx, pkt);
+    if (ret < 0)
+    {
+        return;
+    }
+
+    while (ret >= 0)
+    {
+        mMutex.lock();
+        if(mAbort)
+        {
+            mMutex.unlock();
+            break;
+        }
+        mMutex.unlock();
+
+        ret = avcodec_receive_frame(ctx->v_codec_ctx, frm);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0)
+        {
+            break;
+        }
+
+        qint64 timestamp = (qint64)(1000 * frm->pts * av_q2d(ctx->fmt_ctx->streams[ctx->v_index]->time_base));
+        //qDebug() << "Video timestamp: " << timestamp << "s";
+        if(!mTimestampTimer.isValid())
+        {
+            mTimestampTimer.start();
+        }
+        if(ctx->sws_ctx != nullptr)
+        {
+            //为yuv420p_frm中的data,linesize指针分配空间
+            if(ctx->v_frm->data[0] == nullptr)
+            {
+                ret = av_image_alloc(ctx->v_frm->data, ctx->v_frm->linesize,
+                    param->video.width, param->video.height, param->video.fmt, 1);
+            }
+
+            //转换
+            ret = sws_scale(ctx->sws_ctx, frm->data, frm->linesize, 0, ctx->v_codec_ctx->height,
+                ctx->v_frm->data, ctx->v_frm->linesize);
+
+            if(ret == param->video.height)
+            {
+                QImage image(ctx->v_frm->data[0], param->video.width, param->video.height,
+                        ctx->v_frm->linesize[0], QImage::Format_RGB888, nullptr, nullptr);
+                while (!mTimestampTimer.hasExpired(timestamp));
+                emit frame(image);
+            }
+        }
+        else
+        {
+            //不做转换，则可能会有填充得空白数据，比如688*384的视频会填充成768*384，data中每行结尾都有无效数据
+            int ySize = frm->linesize[0] * ctx->v_codec_ctx->height;// ctx->v_codec_ctx->width * ctx->v_codec_ctx->height;
+            int uSize = ySize / 4;
+            int vSize = ySize / 4;
+//                fwrite(frm->data[0], 1, ySize, fVideo);
+//                fwrite(frm->data[1], 1, uSize, fVideo);
+//                fwrite(frm->data[2], 1, vSize, fVideo);
+        }
+    }
+}

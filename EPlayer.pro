@@ -18,11 +18,13 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
     decodethread.h.cpp \
     main.cpp \
-    mainwindow.cpp
+    mainwindow.cpp \
+    pcmplayer.cpp
 
 HEADERS += \
     decodethread.h \
-    mainwindow.h
+    mainwindow.h \
+    pcmplayer.h
 
 FORMS += \
     mainwindow.ui

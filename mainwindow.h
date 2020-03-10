@@ -2,13 +2,15 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-#include <QAudioOutput>
+#include <QScopedPointer>
 
 #include "decodethread.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
 QT_END_NAMESPACE
+
+class PCMPlayer;
 
 class MainWindow : public QMainWindow
 {
@@ -19,11 +21,15 @@ public:
     ~MainWindow();
 
 private slots:
+    void setAudioParams(int sampleRate, int channels, int fmt);
+
+    void setVideoParams(int w, int h);
+
     void showFrame(QImage image);
 
-    void playFrame();
+    void play();
 
-    void playAudio(unsigned char *data, int length);
+    void playAudio(const char *data, int length);
 
     void on_actionOpen_triggered();
 
@@ -31,7 +37,6 @@ private:
     Ui::MainWindow *ui;
 
     DecodeThread mDecodeThread;
-    QAudioOutput *mAudioOutput;
-    QIODevice *mAudioStream;
+    QScopedPointer<PCMPlayer> mPcmPlayer;
 };
 #endif // MAINWINDOW_H

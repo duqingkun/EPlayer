@@ -70,19 +70,95 @@ public:
     DecodeThread(QObject *parent = nullptr);
     ~DecodeThread();
 
+    ///
+    /// \brief 加载音视频文件
+    /// \param filename: 文件路径
+    ///
     void load(const QString &filename);
 
 signals:
+    ///
+    /// \brief 加载完成，可以开始播放
+    ///
     void loaded();
+
+    ///
+    /// \brief 视频解码信息
+    /// \param w: 视频宽度
+    /// \param h: 视频高度
+    ///
+    void videoInfo(int w, int h);
+
+    ///
+    /// \brief 音频解码信息
+    /// \param sampleRate: 采样率
+    /// \param channels: 通道数
+    /// \param fmt: AVSampleFormat格式
+    ///
+    void audioInfo(int sampleRate, int channels, int fmt);
+
+    ///
+    /// \brief 发送一帧视频图像数据
+    /// \param image
+    ///
     void frame(QImage image);
-    void audio(unsigned char *data, int length);
+
+    ///
+    /// \brief 发送一帧音频数据
+    /// \param data
+    /// \param length
+    ///
+    void audio(const char *data, int length);
 
 protected:
+    ///
+    /// \brief 处理解码流程
+    ///
     void run() override;
 
 private:
+    void freeAll();
+
+    ///
+    /// \brief 打开输入文件，并打开相应的解码器
+    /// \param ctx: 上下文指针
+    /// \param filename: 输入文件路径
+    /// \return
+    ///
     bool openInput(Context *ctx, const char *filename);
+
+    ///
+    /// \brief 解码一个packet
+    /// \param ctx
+    /// \param pkt: 解码前的一包数据
+    /// \param param: 参数
+    ///
     void decodePacket(Context *ctx, AVPacket *pkt, Param *param);
+
+    ///
+    /// \brief 初始化，打开解码器并获取参数
+    /// \param filename
+    /// \return
+    ///
+    bool init(const QString &filename);
+
+    ///
+    /// \brief 解码一个音频包
+    /// \param ctx
+    /// \param pkt
+    /// \param frm: 用于存放解码后的数据
+    /// \param param
+    ///
+    void decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, Param *param);
+
+    ///
+    /// \brief 解码一个视频包
+    /// \param ctx
+    /// \param pkt
+    /// \param frm: 用于存放解码后的数据
+    /// \param param
+    ///
+    void decodeVideoPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, Param *param);
 
 signals:
 
@@ -94,8 +170,6 @@ private:
 
     bool mAbort;
     QMutex mMutex;
-
-    FILE *fAudio;
 
     QElapsedTimer mTimestampTimer;
 };
