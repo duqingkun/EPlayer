@@ -62,6 +62,7 @@ public slots:
 private:
     QScopedPointer<PCMDevice> mDevice;
     QScopedPointer<QAudioOutput> mAudioOutput;
+    QIODevice *mIODevice;
 };
 
 #endif // PCMPLAYER_H

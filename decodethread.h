@@ -5,7 +5,9 @@
 #include <QThread>
 #include <QMutex>
 #include <QImage>
-#include <QElapsedTimer>
+
+#include "cache.h"
+#include "datastructure.h"
 
 extern "C"
 {
@@ -31,6 +33,7 @@ typedef struct _AudioParam
     //private
     int __nb_channels;
     int __nb_samples;
+    int __src_nb_samples;
 }AudioParam;
 
 typedef struct _VideoParam
@@ -67,7 +70,7 @@ class DecodeThread : public QThread
 {
     Q_OBJECT
 public:
-    DecodeThread(QObject *parent = nullptr);
+    DecodeThread(Cache<AudioFrame> *ac, Cache<VideoFrame> *vc, QObject *parent = nullptr);
     ~DecodeThread();
 
     ///
@@ -96,19 +99,6 @@ signals:
     /// \param fmt: AVSampleFormat格式
     ///
     void audioInfo(int sampleRate, int channels, int fmt);
-
-    ///
-    /// \brief 发送一帧视频图像数据
-    /// \param image
-    ///
-    void frame(QImage image);
-
-    ///
-    /// \brief 发送一帧音频数据
-    /// \param data
-    /// \param length
-    ///
-    void audio(const char *data, int length);
 
 protected:
     ///
@@ -168,10 +158,8 @@ private:
 
     QString mFilename;
 
-    bool mAbort;
-    QMutex mMutex;
-
-    QElapsedTimer mTimestampTimer;
+    Cache<AudioFrame> *mAudioCache;
+    Cache<VideoFrame> *mVideoCache;
 };
 
 #endif // DECODER_H

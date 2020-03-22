@@ -4,7 +4,11 @@
 #include <QMainWindow>
 #include <QScopedPointer>
 
+#include "datastructure.h"
+#include "cache.h"
 #include "decodethread.h"
+#include "allocateaudiothread.h"
+#include "allocatevideothread.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class MainWindow; }
@@ -36,7 +40,11 @@ private slots:
 private:
     Ui::MainWindow *ui;
 
-    DecodeThread mDecodeThread;
+    QScopedPointer<Cache<AudioFrame>> mAudioCache;
+    QScopedPointer<Cache<VideoFrame>> mVideoCache;
+    QScopedPointer<DecodeThread> mDecodeThread;
+    QScopedPointer<AllocateAudioThread> mAllocateAudioThread;
+    QScopedPointer<AllocateVideoThread> mAllocateVideoThread;
     QScopedPointer<PCMPlayer> mPcmPlayer;
 };
 #endif // MAINWINDOW_H

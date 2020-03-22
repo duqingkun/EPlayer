@@ -16,18 +16,19 @@ extern "C"
 #include <libavutil/channel_layout.h>
 }
 
-DecodeThread::DecodeThread(QObject *parent)
+DecodeThread::DecodeThread(Cache<AudioFrame> *ac, Cache<VideoFrame> *vc, QObject *parent)
     : QThread(parent)
+    , mAudioCache(ac)
+    , mVideoCache(vc)
 {
-    mAbort = false;
 }
 
 DecodeThread::~DecodeThread()
 {
-    mMutex.lock();
-    mAbort = true;
-    mMutex.unlock();
-
+    mAudioCache->close();
+    mVideoCache->close();
+    requestInterruption();
+    quit();
     wait();
 }
 
@@ -36,13 +37,11 @@ void DecodeThread::load(const QString &filename)
     mFilename = filename;
     if(isRunning())
     {
-        mMutex.lock();
-        mAbort = true;
-        mMutex.unlock();
-
+        requestInterruption();
+        quit();
         wait();
     }
-    mAbort = false;
+
     init(mFilename);
     emit loaded();
 }
@@ -52,7 +51,6 @@ bool DecodeThread::init(const QString &filename)
     //初始化
     memset(&mCtx, 0, sizeof(Context));
     memset(&mParam, 0, sizeof(Param));
-    mTimestampTimer.invalidate();
 
     //打开编码器
     if(!openInput(&mCtx, mFilename.toStdString().c_str()))
@@ -83,6 +81,8 @@ bool DecodeThread::init(const QString &filename)
         mParam.audio.rate = 44100; //mCtx.a_codec_ctx->sample_rate;
         mParam.audio.fmt = AV_SAMPLE_FMT_S16P;//mCtx.a_codec_ctx->sample_fmt;
         mParam.audio.__nb_channels = av_get_channel_layout_nb_channels(mParam.audio.ch_layout);
+        mParam.audio.__nb_samples = 0;
+        mParam.audio.__src_nb_samples = 0;
 
         mCtx.swr_ctx = swr_alloc();
         av_opt_set_int(mCtx.swr_ctx, "in_channel_layout", mCtx.a_codec_ctx->channel_layout, 0);
@@ -113,15 +113,8 @@ void DecodeThread::run()
     av_init_packet(&pkt);
 
     //解码
-    while (av_read_frame(mCtx.fmt_ctx, &pkt) >= 0)
+    while (!isInterruptionRequested() && av_read_frame(mCtx.fmt_ctx, &pkt) >= 0)
     {
-        mMutex.lock();
-        if(mAbort)
-        {
-            mMutex.unlock();
-            goto exit;
-        }
-        mMutex.unlock();
         decodePacket(&mCtx, &pkt, &mParam);
     }
 
@@ -130,8 +123,9 @@ void DecodeThread::run()
     pkt.size = 0;
     decodePacket(&mCtx, &pkt, &mParam);
 
-exit:
     freeAll();
+
+    //qDebug() << "====DecodeThread exit.====";
 }
 
 void DecodeThread::freeAll()
@@ -224,13 +218,10 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
     }
     while (ret >= 0)
     {
-        mMutex.lock();
-        if(mAbort)
+        if(isInterruptionRequested())
         {
-            mMutex.unlock();
-            break;
+            return;
         }
-        mMutex.unlock();
 
         ret = avcodec_receive_frame(ctx->a_codec_ctx, frm);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0)
@@ -239,10 +230,6 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
         }
 
         qint64 timestamp = (qint64)(frm->pts * av_q2d(ctx->fmt_ctx->streams[ctx->a_index]->time_base) * 1000); //ms
-        if(!mTimestampTimer.isValid())
-        {
-            mTimestampTimer.start();
-        }
         //qDebug() << "Audio timestamp: " << timestamp << "ms";
         int data_size = av_get_bytes_per_sample(param->audio.fmt);
         if(data_size < 0)
@@ -252,8 +239,9 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
 
         if(ctx->swr_ctx != nullptr)     //需要转换格式
         {
-            if (ctx->a_frm->data[0] == nullptr)
+            if (param->audio.__src_nb_samples != frm->nb_samples)//改变时重新计算
             {
+                param->audio.__src_nb_samples = frm->nb_samples;
                 int dst_nb_samples = av_rescale_rnd(swr_get_delay(ctx->swr_ctx, ctx->a_codec_ctx->sample_rate) + frm->nb_samples,
                     param->audio.rate, ctx->a_codec_ctx->sample_rate, AV_ROUND_UP);
                 if(dst_nb_samples > param->audio.__nb_samples)
@@ -267,6 +255,8 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
                     param->audio.__nb_samples = dst_nb_samples;
                 }
             }
+
+            //转换，返回转换后的nb_samples, 转换前的数据在frm中，转换后的数据在ctx->a_frm->data中
             ret = swr_convert(ctx->swr_ctx, ctx->a_frm->data, param->audio.__nb_samples, (const uint8_t**)frm->data, frm->nb_samples);
             if(ret < 0)
             {
@@ -274,15 +264,22 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
             }
 
             QByteArray datagram;
-            for (int i = 0; i < frm->nb_samples; i++)
+            for (int i = 0; i < ret; i++) //nb_samples
             {
-                for (int ch = 0; ch < ctx->a_codec_ctx->channels; ch++)
+                for (int ch = 0; ch < param->audio.__nb_channels; ch++)
                 {
                     datagram.append((const char *)(ctx->a_frm->data[ch] + data_size * i), data_size);
                 }
             }
-            while (!mTimestampTimer.hasExpired((qint64)timestamp));
-            emit audio(datagram.constData(), datagram.size());
+
+            AudioFrame af;
+            af.timestamp = timestamp;
+            af.length = datagram.length();
+            af.data = (char *)malloc(af.length);
+            memcpy(af.data, datagram.constData(), af.length);
+            mAudioCache->push(af);
+
+            //qDebug() << "<- push audio timestamp=" << timestamp;
         }
         else    //不需要转换格式
         {
@@ -294,8 +291,13 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
                     datagram.append((const char *)(ctx->a_frm->data[ch] + data_size * i), data_size);
                 }
             }
-            while (!mTimestampTimer.hasExpired((qint64)timestamp));
-            emit audio(datagram.constData(), datagram.size());
+
+            AudioFrame af;
+            af.timestamp = timestamp;
+            af.length = datagram.length();
+            af.data = (char *)malloc(af.length);
+            memcpy(af.data, datagram.constData(), af.length);
+            mAudioCache->push(af);
         }
     }
 }
@@ -310,13 +312,10 @@ void DecodeThread::decodeVideoPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
 
     while (ret >= 0)
     {
-        mMutex.lock();
-        if(mAbort)
+        if(isInterruptionRequested())
         {
-            mMutex.unlock();
-            break;
+            return;
         }
-        mMutex.unlock();
 
         ret = avcodec_receive_frame(ctx->v_codec_ctx, frm);
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0)
@@ -325,11 +324,7 @@ void DecodeThread::decodeVideoPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
         }
 
         qint64 timestamp = (qint64)(1000 * frm->pts * av_q2d(ctx->fmt_ctx->streams[ctx->v_index]->time_base));
-        //qDebug() << "Video timestamp: " << timestamp << "s";
-        if(!mTimestampTimer.isValid())
-        {
-            mTimestampTimer.start();
-        }
+
         if(ctx->sws_ctx != nullptr)
         {
             //为yuv420p_frm中的data,linesize指针分配空间
@@ -347,8 +342,12 @@ void DecodeThread::decodeVideoPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
             {
                 QImage image(ctx->v_frm->data[0], param->video.width, param->video.height,
                         ctx->v_frm->linesize[0], QImage::Format_RGB888, nullptr, nullptr);
-                while (!mTimestampTimer.hasExpired(timestamp));
-                emit frame(image);
+
+                VideoFrame vf;
+                vf.timestamp = timestamp;
+                vf.image = image;
+                mVideoCache->push(vf);
+                qDebug() << "<- push video timestamp=" << timestamp;
             }
         }
         else

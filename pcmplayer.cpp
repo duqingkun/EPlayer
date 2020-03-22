@@ -17,24 +17,24 @@ PCMDevice::~PCMDevice()
 qint64 PCMDevice::readData(char *data, qint64 maxlen)
 {
     qint64 size = 0;
-    mutex.lock();
+   // mutex.lock();
     if (!mBuffer.isEmpty())
     {
         size = qMin((qint64)mBuffer.size(), maxlen);
         memcpy(data, mBuffer.constData(), size);
         mBuffer.remove(0, size);
     }
-    mutex.unlock();
-    //qDebug() << "readData: " << size << " \tremain: " << mBuffer.size();
+   // mutex.unlock();
+    qDebug() << "readData: " << size << " \tremain: " << mBuffer.size();
     return size;
 }
 
 qint64 PCMDevice::writeData(const char *data, qint64 len)
 {
-    mutex.lock();
+   // mutex.lock();
     mBuffer.append(data, len);
-    mutex.unlock();
-    //qDebug() << "writeData: " << len << " \tremain: " << mBuffer.size();
+   // mutex.unlock();
+    qDebug() << "writeData: " << len << " \tremain: " << mBuffer.size();
 }
 
 qint64 PCMDevice::bytesAvailable() const
@@ -66,16 +66,17 @@ void PCMPlayer::setParams(int sampleRate, int channels, int bitSize, QAudioForma
     }
 
     mAudioOutput.reset(new QAudioOutput(deviceInfo, format));
-    mDevice.reset(new PCMDevice(this));
+    //mDevice.reset(new PCMDevice(this));
 }
 
 void PCMPlayer::start()
 {
-    if(mDevice.isNull())
-    {
-        mDevice.reset(new PCMDevice(this));
-    }
-    mAudioOutput->start(mDevice.data());
+//    if(mDevice.isNull())
+//    {
+//        mDevice.reset(new PCMDevice(this));
+//    }
+//    mAudioOutput->start(mDevice.data());
+    mIODevice = mAudioOutput->start();
 }
 
 void PCMPlayer::stop()
@@ -85,5 +86,6 @@ void PCMPlayer::stop()
 
 void PCMPlayer::addData(const char *data, int len)
 {
-    mDevice->write(data, len);
+    //mDevice->write(data, len);
+    mIODevice->write(data, len);
 }
