@@ -17,7 +17,11 @@ public:
 signals:
     void audio(const char *data, int length);
 
-    void video(QImage image);
+    ///
+    /// \brief 发送音频时间戳，用于和视频帧同步
+    /// \param timestamp，单位ms
+    ///
+    void timestamp(quint64 timestamp);
 
 protected:
     void run() override;

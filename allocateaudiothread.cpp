@@ -37,6 +37,7 @@ void AllocateAudioThread::run()
             {
                 msleep(sleep);
             }
+            timestamp(af.timestamp);
             audio(af.data, af.length);
         }
     }

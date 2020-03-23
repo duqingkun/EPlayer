@@ -3,6 +3,7 @@
 
 #include <QThread>
 #include <QElapsedTimer>
+#include <QMutex>
 
 #include "cache.h"
 #include "datastructure.h"
@@ -14,9 +15,10 @@ public:
     AllocateVideoThread(Cache<VideoFrame> *vc, QObject *parent = nullptr);
     ~AllocateVideoThread();
 
-signals:
-    void audio(const char *data, int length);
+public slots:
+    void timestamp(quint64 timestamp);
 
+signals:
     void video(QImage image);
 
 protected:
@@ -26,9 +28,12 @@ private:
     Cache<VideoFrame> *mVideoCache;
 
     QElapsedTimer mTimer;
+    QMutex mMutex;
 
     bool first;
     quint64 firstTimestamp;
+    quint64 mTimestamp;
+    bool mTimestampUpdated;
 };
 
 #endif // ALLOCATEVIDEOTHREAD_H

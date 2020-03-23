@@ -277,7 +277,7 @@ void DecodeThread::decodeAudioPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
             af.length = datagram.length();
             af.data = (char *)malloc(af.length);
             memcpy(af.data, datagram.constData(), af.length);
-            mAudioCache->push(af);
+            //mAudioCache->push(af);
 
             //qDebug() << "<- push audio timestamp=" << timestamp;
         }
@@ -347,7 +347,7 @@ void DecodeThread::decodeVideoPacket(Context *ctx, AVPacket *pkt, AVFrame *frm, 
                 vf.timestamp = timestamp;
                 vf.image = image;
                 mVideoCache->push(vf);
-                qDebug() << "<- push video timestamp=" << timestamp;
+                //qDebug() << "<- push video timestamp=" << timestamp;
             }
         }
         else

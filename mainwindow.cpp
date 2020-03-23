@@ -28,7 +28,7 @@ MainWindow::MainWindow(QWidget *parent)
 //    connect(&mDecodeThread, &DecodeThread::audioInfo, this, &MainWindow::setAudioParams);
 //    connect(&mDecodeThread, &DecodeThread::videoInfo, this, &MainWindow::setVideoParams);
 
-    quint64 maxCacheSize = 50;
+    quint64 maxCacheSize = 500;
     mAudioCache.reset(new Cache<AudioFrame>(maxCacheSize));
     mVideoCache.reset(new Cache<VideoFrame>(maxCacheSize));
     mDecodeThread.reset(new DecodeThread(mAudioCache.data(), mVideoCache.data(), this));
@@ -40,6 +40,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(mDecodeThread.data(), &DecodeThread::videoInfo, this, &MainWindow::setVideoParams);
     connect(mAllocateVideoThread.data(), &AllocateVideoThread::video, this, &MainWindow::showFrame);
     connect(mAllocateAudioThread.data(), &AllocateAudioThread::audio, this, &MainWindow::playAudio);
+    connect(mAllocateAudioThread.data(), &AllocateAudioThread::timestamp, mAllocateVideoThread.data(), &AllocateVideoThread::timestamp);
 }
 
 MainWindow::~MainWindow()

@@ -5,6 +5,8 @@
 AllocateVideoThread::AllocateVideoThread(Cache<VideoFrame> *vc, QObject *parent)
     : QThread(parent)
     , mVideoCache(vc)
+    , mTimestamp(0)
+    , mTimestampUpdated(false)
 {
 
 }
@@ -17,6 +19,14 @@ AllocateVideoThread::~AllocateVideoThread()
     wait();
 }
 
+void AllocateVideoThread::timestamp(quint64 timestamp)
+{
+  //  mMutex.lock();
+    mTimestamp = timestamp;
+  //  mTimestampUpdated = true;
+  //  mMutex.unlock();
+}
+
 void AllocateVideoThread::run()
 {
     first = true;
@@ -26,7 +36,7 @@ void AllocateVideoThread::run()
         VideoFrame vf = mVideoCache->pop();
         if(!vf.image.isNull())
         {
-            qDebug() << "  -> pop video timestamp=" << vf.timestamp;
+            //qDebug() << "  -> pop video timestamp=" << vf.timestamp;
             if(first)
             {
                 first = false;
@@ -34,13 +44,28 @@ void AllocateVideoThread::run()
                 mTimer.start();
             }
 
-            qint64 sleep =  vf.timestamp - firstTimestamp - mTimer.elapsed();
-            if(sleep > 0)
+            qint64 sleep = 0;
+
+           // mMutex.lock();
+            if(mTimestampUpdated)
             {
-                msleep(sleep);
+                sleep = vf.timestamp - mTimestamp;
+                mTimestampUpdated = false;
+            }
+            else
+            {
+                sleep =  vf.timestamp - firstTimestamp - mTimer.elapsed();
             }
 
-            emit video(vf.image);
+          //  mMutex.unlock();
+
+            //qDebug() << sleep;
+            if(sleep > 0)
+            {
+                //msleep(sleep);
+                usleep(sleep * 1000);
+                emit video(vf.image);
+            }
         }
     }
 }

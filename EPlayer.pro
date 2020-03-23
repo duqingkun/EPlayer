@@ -18,7 +18,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
     allocateaudiothread.cpp \
     allocatevideothread.cpp \
-    decodethread.h.cpp \
+    decodethread.cpp \
     main.cpp \
     mainwindow.cpp \
     pcmplayer.cpp
